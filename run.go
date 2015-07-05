@@ -6,6 +6,8 @@ import "os"
 import "flag" // Cause all the cool kids use flags, not just argv
 import "io/ioutil"
 import "time"
+import "bufio"
+import "strings"
 
 // Create our semaphore (I don't know enough Go to be sure this is the 'best' way
 var sem = make(chan int, 1)
@@ -55,29 +57,66 @@ func main() {
 func handleConnection(conn net.Conn) {
 	fmt.Println("Connection started...")
 
+	// Connection reader
+	reader := bufio.NewReader(conn)
+	// Figure out what kind of thingy they're saying to us
+	operation, _ := reader.ReadString('\n')
+	operation = strings.TrimSpace(operation)
+	switch {
+	// An operation that requires further processing
+	case operation == "new", operation == "stop":
+
+	// Existing daemon pinging us
+	case operation == "ping":
+		// Not implemented yet
+		conn.Close()
+		return // Stop processing
+
+	case true:
+		// Guess it's invalid?
+		conn.Write([]byte("Invalid operation specified: " + operation))
+		conn.Close()
+		return // Stop processing
+	}
+
 	// Get an exclusive lock on our fuzzers
 	sem <- 1
 
-	// Check whether there is a fuzzer they can use
-	potential := false
-	for key, f := range fuzzers {
-		if !f.active {
-			// A non-active fuzzer we can assign
-			fuzzers[key].active = true
-			conn.Write([]byte(f.name))
-			potential = true
-			break
+	if operation == "new" {
+		// Check whether there is a fuzzer they can use
+		potential := false
+		for key, f := range fuzzers {
+			if !f.active {
+				// A non-active fuzzer we can assign
+				fuzzers[key].active = true
+				conn.Write([]byte(f.name))
+				potential = true
+				break
+			}
 		}
-	}
-	if !potential {
-		// We need to create a new fuzzer + name for them
-		newname := fmt.Sprintf("fuzzer%03d", len(fuzzers)+1)
-		newfuzzer := Fuzzer{name: newname, active: true}
-		fuzzers = append(fuzzers, newfuzzer)
-		conn.Write([]byte(newname))
+		if !potential {
+			// We need to create a new fuzzer + name for them
+			newname := fmt.Sprintf("fuzzer%03d", len(fuzzers)+1)
+			newfuzzer := Fuzzer{name: newname, active: true}
+			fuzzers = append(fuzzers, newfuzzer)
+			conn.Write([]byte(newname))
+		}
+	} else if operation == "stop" {
+		// Read the name of the fuzzer
+		fuzzername, _ := reader.ReadString('\n')
+		fuzzername = strings.TrimSpace(fuzzername)
+		for key, f := range fuzzers {
+			if f.name == fuzzername {
+				fuzzers[key].active = false
+				break
+			}
+		}
 	}
 	// Release the lock
 	<-sem
+
+	// Close the connection gracefully
+	conn.Close()
 }
 
 type Fuzzer struct {
